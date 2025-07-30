@@ -1,15 +1,16 @@
 from flask import Flask, render_template, request, redirect
-import pymysql
+import psycopg2
+import os
 
 app = Flask(__name__)
 
 def conectar_db():
-    return pymysql.connect(
-        host='localhost',
-        user='root',
-        password='',
-        db='logistica',
-        port=3307
+    return psycopg2.connect(
+        host=os.environ.get('DB_HOST'),
+        database=os.environ.get('DB_NAME'),
+        user=os.environ.get('DB_USER'),
+        password=os.environ.get('DB_PASSWORD'),
+        port=5432
     )
 
 @app.route('/')
@@ -83,6 +84,5 @@ def eliminar_camion(id):
         return f"❌ Error al eliminar: {e}"
 
 if __name__ == '__main__':
-    import os
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
