@@ -1,88 +1,108 @@
-from flask import Flask, render_template, request, redirect
-import psycopg2
-import os
+from flask import Flask, render_template, request, redirect, url_for, jsonify
+import pymysql
+import pickle
+import numpy as np
 
 app = Flask(__name__)
 
+# =========================
+# CONFIGURACIÓN BASE DE DATOS
+# =========================
 def conectar_db():
-    return psycopg2.connect(
-        host=os.environ.get('DB_HOST'),
-        database=os.environ.get('DB_NAME'),
-        user=os.environ.get('DB_USER'),
-        password=os.environ.get('DB_PASSWORD'),
-        port=5432
+    return pymysql.connect(
+        host='localhost',   # Cambiar si usas Render con BBDD externa
+        user='root',
+        password='',
+        db='logistica',
+        port=3307
     )
 
+# =========================
+# RUTAS DEL MÓDULO LOGÍSTICA
+# =========================
 @app.route('/')
 def index():
-    try:
-        conexion = conectar_db()
-        cursor = conexion.cursor()
-        cursor.execute("SELECT * FROM camiones")
-        camiones = cursor.fetchall()
-        conexion.close()
-        return render_template('index.html', camiones=camiones)
-    except Exception as e:
-        return f"❌ Error: {e}"
+    conn = conectar_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM camiones")
+    camiones = cursor.fetchall()
+    conn.close()
+    return render_template('index.html', camiones=camiones)
 
-@app.route('/agregar')
-def formulario_agregar():
-    return render_template('form_camion.html')
-
-@app.route('/insertar', methods=['POST'])
-def insertar_camion():
-    placa = request.form.get('placa')
-    modelo = request.form.get('modelo')
-    capacidad = request.form.get('capacidad')
-    try:
-        conexion = conectar_db()
-        cursor = conexion.cursor()
-        cursor.execute("INSERT INTO camiones (placa, modelo, capacidad) VALUES (%s, %s, %s)", (placa, modelo, capacidad))
-        conexion.commit()
-        conexion.close()
-        return redirect('/')
-    except Exception as e:
-        return f"❌ Error al insertar: {e}"
-
-@app.route('/editar/<int:id>')
-def editar_camion(id):
-    try:
-        conexion = conectar_db()
-        cursor = conexion.cursor()
-        cursor.execute("SELECT * FROM camiones WHERE id = %s", (id,))
-        camion = cursor.fetchone()
-        conexion.close()
-        return render_template('form_editar.html', camion=camion)
-    except Exception as e:
-        return f"❌ Error al cargar camión para editar: {e}"
-
-@app.route('/actualizar/<int:id>', methods=['POST'])
-def actualizar_camion(id):
-    placa = request.form.get('placa')
-    modelo = request.form.get('modelo')
-    capacidad = request.form.get('capacidad')
-    try:
-        conexion = conectar_db()
-        cursor = conexion.cursor()
-        cursor.execute("UPDATE camiones SET placa=%s, modelo=%s, capacidad=%s WHERE id=%s", (placa, modelo, capacidad, id))
-        conexion.commit()
-        conexion.close()
-        return redirect('/')
-    except Exception as e:
-        return f"❌ Error al actualizar: {e}"
+@app.route('/agregar', methods=['POST'])
+def agregar():
+    if request.method == 'POST':
+        placa = request.form['placa']
+        marca = request.form['marca']
+        modelo = request.form['modelo']
+        conn = conectar_db()
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO camiones (placa, marca, modelo) VALUES (%s, %s, %s)", (placa, marca, modelo))
+        conn.commit()
+        conn.close()
+    return redirect(url_for('index'))
 
 @app.route('/eliminar/<int:id>')
-def eliminar_camion(id):
-    try:
-        conexion = conectar_db()
-        cursor = conexion.cursor()
-        cursor.execute("DELETE FROM camiones WHERE id = %s", (id,))
-        conexion.commit()
-        conexion.close()
-        return redirect('/')
-    except Exception as e:
-        return f"❌ Error al eliminar: {e}"
+def eliminar(id):
+    conn = conectar_db()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM camiones WHERE id=%s", (id,))
+    conn.commit()
+    conn.close()
+    return redirect(url_for('index'))
 
+@app.route('/editar/<int:id>', methods=['GET', 'POST'])
+def editar(id):
+    conn = conectar_db()
+    cursor = conn.cursor()
+    if request.method == 'POST':
+        placa = request.form['placa']
+        marca = request.form['marca']
+        modelo = request.form['modelo']
+        cursor.execute("UPDATE camiones SET placa=%s, marca=%s, modelo=%s WHERE id=%s",
+                       (placa, marca, modelo, id))
+        conn.commit()
+        conn.close()
+        return redirect(url_for('index'))
+    else:
+        cursor.execute("SELECT * FROM camiones WHERE id=%s", (id,))
+        camion = cursor.fetchone()
+        conn.close()
+        return render_template('editar.html', camion=camion)
+
+# =========================
+# CARGA DEL MODELO DE MANTENIMIENTO
+# =========================
+with open("modelo.pkl", "rb") as f:
+    modelo = pickle.load(f)
+
+# =========================
+# RUTAS DEL MÓDULO MANTENIMIENTO
+# =========================
+@app.route('/mantenimiento')
+def mantenimiento():
+    return render_template('mantenimiento.html')
+
+@app.route('/predecir', methods=['POST'])
+def predecir():
+    try:
+        datos = [
+            float(request.form['kilometraje']),
+            float(request.form['combustible']),
+            float(request.form['frecuencia']),
+            float(request.form['condiciones']),
+            float(request.form['rutas'])
+        ]
+        entrada = np.array(datos).reshape(1, -1)
+        prediccion = modelo.predict(entrada)[0]
+        resultado = "Mantenimiento Requerido" if prediccion == 1 else "Sin Mantenimiento Urgente"
+        return render_template('resultado.html', resultado=resultado)
+    except Exception as e:
+        return jsonify({"error": str(e)})
+
+# =========================
+# EJECUCIÓN LOCAL
+# =========================
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(debug=True)
+
