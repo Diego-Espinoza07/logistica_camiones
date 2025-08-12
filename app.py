@@ -1,88 +1,63 @@
-from flask import Flask, render_template, request, redirect
-import psycopg2
-import os
+from flask import Flask, render_template, request, redirect, url_for
+import pymysql
+import pickle
+import numpy as np
 
 app = Flask(__name__)
 
+# ==========================
+# CONEXIÓN BASE DE DATOS
+# ==========================
 def conectar_db():
-    return psycopg2.connect(
-        host=os.environ.get('DB_HOST'),
-        database=os.environ.get('DB_NAME'),
-        user=os.environ.get('DB_USER'),
-        password=os.environ.get('DB_PASSWORD'),
-        port=5432
+    return pymysql.connect(
+        host='localhost',
+        user='root',
+        password='',
+        db='logistica',
+        port=3307
     )
 
+# ==========================
+# RUTAS LOGÍSTICA (CRUD)
+# ==========================
 @app.route('/')
 def index():
-    try:
-        conexion = conectar_db()
-        cursor = conexion.cursor()
-        cursor.execute("SELECT * FROM camiones")
-        camiones = cursor.fetchall()
-        conexion.close()
-        return render_template('index.html', camiones=camiones)
-    except Exception as e:
-        return f"❌ Error: {e}"
+    conexion = conectar_db()
+    cursor = conexion.cursor()
+    cursor.execute("SELECT * FROM camiones")
+    camiones = cursor.fetchall()
+    conexion.close()
+    return render_template('index.html', camiones=camiones)
 
-@app.route('/agregar')
-def formulario_agregar():
-    return render_template('form_camion.html')
+# ==========================
+# RUTAS MANTENIMIENTO
+# ==========================
+@app.route('/mantenimiento')
+def mantenimiento():
+    return render_template('mantenimiento.html')
 
-@app.route('/insertar', methods=['POST'])
-def insertar_camion():
-    placa = request.form.get('placa')
-    modelo = request.form.get('modelo')
-    capacidad = request.form.get('capacidad')
-    try:
-        conexion = conectar_db()
-        cursor = conexion.cursor()
-        cursor.execute("INSERT INTO camiones (placa, modelo, capacidad) VALUES (%s, %s, %s)", (placa, modelo, capacidad))
-        conexion.commit()
-        conexion.close()
-        return redirect('/')
-    except Exception as e:
-        return f"❌ Error al insertar: {e}"
+@app.route('/predecir', methods=['POST'])
+def predecir():
+    # Cargar el modelo
+    with open('modelo.pkl', 'rb') as f:
+        modelo = pickle.load(f)
+    
+    # Recibir datos del formulario
+    km = float(request.form['kilometraje'])
+    combustible = float(request.form['combustible'])
+    averias = int(request.form['averias'])
+    carga = float(request.form['carga'])
+    dificultad = int(request.form['dificultad'])
 
-@app.route('/editar/<int:id>')
-def editar_camion(id):
-    try:
-        conexion = conectar_db()
-        cursor = conexion.cursor()
-        cursor.execute("SELECT * FROM camiones WHERE id = %s", (id,))
-        camion = cursor.fetchone()
-        conexion.close()
-        return render_template('form_editar.html', camion=camion)
-    except Exception as e:
-        return f"❌ Error al cargar camión para editar: {e}"
+    # Preparar datos para el modelo
+    datos = np.array([[km, combustible, averias, carga, dificultad]])
 
-@app.route('/actualizar/<int:id>', methods=['POST'])
-def actualizar_camion(id):
-    placa = request.form.get('placa')
-    modelo = request.form.get('modelo')
-    capacidad = request.form.get('capacidad')
-    try:
-        conexion = conectar_db()
-        cursor = conexion.cursor()
-        cursor.execute("UPDATE camiones SET placa=%s, modelo=%s, capacidad=%s WHERE id=%s", (placa, modelo, capacidad, id))
-        conexion.commit()
-        conexion.close()
-        return redirect('/')
-    except Exception as e:
-        return f"❌ Error al actualizar: {e}"
+    # Hacer predicción
+    prediccion = modelo.predict(datos)[0]
 
-@app.route('/eliminar/<int:id>')
-def eliminar_camion(id):
-    try:
-        conexion = conectar_db()
-        cursor = conexion.cursor()
-        cursor.execute("DELETE FROM camiones WHERE id = %s", (id,))
-        conexion.commit()
-        conexion.close()
-        return redirect('/')
-    except Exception as e:
-        return f"❌ Error al eliminar: {e}"
+    resultado = "Mantenimiento pronto" if prediccion == 1 else "En buen estado"
+    return render_template('mantenimiento.html', resultado=resultado)
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(debug=True)
+
