@@ -1,108 +1,141 @@
-from flask import Flask, render_template, request, redirect, url_for, jsonify
-import pymysql
-import pickle
-import numpy as np
+from flask import Flask, render_template, request, redirect, url_for
+import sqlite3
+import matplotlib.pyplot as plt
+import os
 
 app = Flask(__name__)
 
-# =========================
-# CONFIGURACIÓN BASE DE DATOS
-# =========================
+# Conectar a la base de datos SQLite
 def conectar_db():
-    return pymysql.connect(
-        host='localhost',   # Cambiar si usas Render con BBDD externa
-        user='root',
-        password='',
-        db='logistica',
-        port=3307
-    )
+    conn = sqlite3.connect("logistica.db")
+    conn.row_factory = sqlite3.Row
+    return conn
 
-# =========================
-# RUTAS DEL MÓDULO LOGÍSTICA
-# =========================
+# Página principal: listado de camiones
 @app.route('/')
 def index():
     conn = conectar_db()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM camiones")
-    camiones = cursor.fetchall()
+    camiones = conn.execute("SELECT * FROM camiones").fetchall()
     conn.close()
-    return render_template('index.html', camiones=camiones)
+    return render_template("index_logistica.html", camiones=camiones)
 
-@app.route('/agregar', methods=['POST'])
+# Agregar camiones (GET muestra formulario, POST procesa datos)
+@app.route('/agregar', methods=['GET', 'POST'])
 def agregar():
     if request.method == 'POST':
         placa = request.form['placa']
-        marca = request.form['marca']
         modelo = request.form['modelo']
+        año = request.form['año']
+        capacidad = request.form['capacidad']
+
         conn = conectar_db()
-        cursor = conn.cursor()
-        cursor.execute("INSERT INTO camiones (placa, marca, modelo) VALUES (%s, %s, %s)", (placa, marca, modelo))
+        conn.execute("INSERT INTO camiones (placa, modelo, año, capacidad) VALUES (?, ?, ?, ?)",
+                     (placa, modelo, año, capacidad))
         conn.commit()
         conn.close()
-    return redirect(url_for('index'))
 
+        return redirect('/')
+    else:
+        return render_template('agregar.html')
+
+# Eliminar camión
 @app.route('/eliminar/<int:id>')
 def eliminar(id):
     conn = conectar_db()
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM camiones WHERE id=%s", (id,))
+    conn.execute("DELETE FROM camiones WHERE id = ?", (id,))
     conn.commit()
     conn.close()
-    return redirect(url_for('index'))
+    return redirect('/')
 
+# Editar camión
 @app.route('/editar/<int:id>', methods=['GET', 'POST'])
 def editar(id):
     conn = conectar_db()
-    cursor = conn.cursor()
     if request.method == 'POST':
         placa = request.form['placa']
-        marca = request.form['marca']
         modelo = request.form['modelo']
-        cursor.execute("UPDATE camiones SET placa=%s, marca=%s, modelo=%s WHERE id=%s",
-                       (placa, marca, modelo, id))
+        año = request.form['año']
+        capacidad = request.form['capacidad']
+        conn.execute("UPDATE camiones SET placa = ?, modelo = ?, año = ?, capacidad = ? WHERE id = ?",
+                     (placa, modelo, año, capacidad, id))
         conn.commit()
         conn.close()
-        return redirect(url_for('index'))
+        return redirect('/')
     else:
-        cursor.execute("SELECT * FROM camiones WHERE id=%s", (id,))
-        camion = cursor.fetchone()
+        camion = conn.execute("SELECT * FROM camiones WHERE id = ?", (id,)).fetchone()
         conn.close()
-        return render_template('editar.html', camion=camion)
+        return render_template("editar.html", camion=camion)
 
-# =========================
-# CARGA DEL MODELO DE MANTENIMIENTO
-# =========================
-with open("modelo.pkl", "rb") as f:
-    modelo = pickle.load(f)
-
-# =========================
-# RUTAS DEL MÓDULO MANTENIMIENTO
-# =========================
-@app.route('/mantenimiento')
+# Página mantenimiento: mostrar formulario para predicción
+@app.route('/mantenimiento', methods=['GET'])
 def mantenimiento():
-    return render_template('mantenimiento.html')
+    return render_template("index_mantenimiento.html")
 
+# Procesar predicción (simulada) y generar gráfica dinámica
 @app.route('/predecir', methods=['POST'])
 def predecir():
-    try:
-        datos = [
-            float(request.form['kilometraje']),
-            float(request.form['combustible']),
-            float(request.form['frecuencia']),
-            float(request.form['condiciones']),
-            float(request.form['rutas'])
-        ]
-        entrada = np.array(datos).reshape(1, -1)
-        prediccion = modelo.predict(entrada)[0]
-        resultado = "Mantenimiento Requerido" if prediccion == 1 else "Sin Mantenimiento Urgente"
-        return render_template('resultado.html', resultado=resultado)
-    except Exception as e:
-        return jsonify({"error": str(e)})
+    # Recoger datos del formulario
+    kilometraje = float(request.form['kilometraje'])
+    combustible = float(request.form['combustible'])
+    averias = float(request.form['averias'])
+    carga = float(request.form['carga'])
+    rutas = float(request.form['rutas'])
 
-# =========================
-# EJECUCIÓN LOCAL
-# =========================
+    # Cálculo de ejemplo para riesgo
+    score = kilometraje * 0.1 + combustible * 0.2 + averias * 0.3 + carga * 0.2 + rutas * 0.2
+    resultado = "Alto riesgo" if score > 50 else "Bajo riesgo"
+
+    # Guardar resultado en historial en base de datos
+    conn = conectar_db()
+    conn.execute(
+        "INSERT INTO historial_mantenimiento (kilometraje, combustible, averias, carga, rutas, resultado) VALUES (?, ?, ?, ?, ?, ?)",
+        (kilometraje, combustible, averias, carga, rutas, resultado)
+    )
+    conn.commit()
+    conn.close()
+
+    # Generar gráfica sencilla con matplotlib
+    valores = [kilometraje, combustible, averias, carga, rutas]
+    etiquetas = ['Kilometraje', 'Combustible', 'Averías', 'Carga', 'Rutas']
+
+    plt.figure(figsize=(8,5))
+    plt.bar(etiquetas, valores, color='skyblue')
+    plt.title('Datos de Entrada para Predicción')
+    plt.ylabel('Valor')
+    plt.tight_layout()
+
+    # Guardar imagen en carpeta 'static'
+    if not os.path.exists('static'):
+        os.makedirs('static')
+    ruta_grafica = os.path.join('static', 'grafica.png')
+    plt.savefig(ruta_grafica)
+    plt.close()
+
+    # Renderizar plantilla con resultado y gráfica
+    return render_template("index_mantenimiento.html", resultado=resultado, grafica='grafica.png')
+
+# Mostrar historial de mantenimiento (con encabezados y enumeración)
+@app.route('/historial')
+def historial_mantenimiento():
+    conn = conectar_db()
+    registros = conn.execute("SELECT * FROM historial_mantenimiento ORDER BY id DESC").fetchall()
+    conn.close()
+
+    encabezados = registros[0].keys() if registros else []
+    registros_enumerados = list(enumerate(registros))
+
+    return render_template("historial_mantenimiento.html", registros=registros_enumerados, encabezados=encabezados)
+
+# Eliminar registro de historial por índice
+@app.route('/eliminar_historial/<int:indice>')
+def eliminar_historial(indice):
+    conn = conectar_db()
+    registro = conn.execute("SELECT id FROM historial_mantenimiento ORDER BY id DESC LIMIT 1 OFFSET ?", (indice,)).fetchone()
+    if registro:
+        conn.execute("DELETE FROM historial_mantenimiento WHERE id = ?", (registro['id'],))
+        conn.commit()
+    conn.close()
+    return redirect(url_for('historial_mantenimiento'))
+
 if __name__ == '__main__':
     app.run(debug=True)
-
